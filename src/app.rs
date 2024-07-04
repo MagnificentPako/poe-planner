@@ -1,9 +1,7 @@
-use crate::tree::{self, ORBIT_NODES};
-use eframe::glow::Texture;
-use egui::{
-    epaint::util::OrderedFloat, pos2, util::History, Align2, Color32, Context, Pos2, Rect,
-    TextureId,
-};
+use std::f32::consts::PI;
+
+use crate::tree::{self, Group, Node, Sprite, SpriteCoords, Spritesheet};
+use egui::{pos2, util::History, Color32, Pos2, Rect, TextureId};
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -19,6 +17,8 @@ pub struct TemplateApp {
     group_bg_tex: TextureId,
     #[serde(skip_serializing)]
     bg_tex: TextureId,
+    skills_tex: TextureId,
+    frame_tex: TextureId,
     frame_times: History<f32>,
 }
 
@@ -32,6 +32,8 @@ impl Default for TemplateApp {
             tree: tree::TreeExport::new().unwrap(),
             group_bg_tex: TextureId::User(999),
             bg_tex: TextureId::User(999),
+            skills_tex: TextureId::User(999),
+            frame_tex: TextureId::User(999),
             frame_times: History::new(0..max_len, max_age),
         }
     }
@@ -63,9 +65,23 @@ impl TemplateApp {
             include_bytes!("../resources/ggg_assets/background-3.png"),
         );
 
+        let skills_tex = image_as_texture(
+            &cc.egui_ctx,
+            "bytes://skills-3.png".into(),
+            include_bytes!("../resources/ggg_assets/skills-3.png"),
+        );
+
+        let frame_tex = image_as_texture(
+            &cc.egui_ctx,
+            "bytes://frame-3.png".into(),
+            include_bytes!("../resources/ggg_assets/frame-3.png"),
+        );
+
         TemplateApp {
-            group_bg_tex: group_bg_tex,
-            bg_tex: bg_tex,
+            group_bg_tex,
+            bg_tex,
+            skills_tex,
+            frame_tex,
             ..Default::default()
         }
     }
@@ -79,26 +95,32 @@ fn image_as_texture(ctx: &egui::Context, uri: String, bytes: &'static [u8]) -> T
         .unwrap()
 }
 
-fn orbit_position(x: f32, y: f32, radius: f32, offset: usize, orbit: usize) -> [f32; 2] {
-    if orbit == 0 {
-        [x, y]
-    } else if orbit == 2 || orbit == 3 {
-        [
-            radius * (tree::ORBIT_ANGLES_16[offset] as f32).to_radians().sin() + x,
-            radius * (tree::ORBIT_ANGLES_16[offset] as f32).to_radians().cos() + y,
-        ]
-    } else {
-        [
-            radius
-                * ((360 / tree::ORBIT_NODES[orbit]) as f32)
-                * (offset as f32 + tree::ORBIT_NODES[orbit] as f32 / 2.0) as f32
-                + x,
-            radius
-                * ((360 / tree::ORBIT_NODES[orbit]) as f32)
-                * (offset as f32 + tree::ORBIT_NODES[orbit] as f32 / 2.0) as f32
-                + y,
-        ]
-    }
+fn orbit_position(node: &Node, group: &Group) -> [f32; 2] {
+    let radius = tree::ORBIT_RADII[node.orbit.unwrap_or(0)] as f32;
+    let skills_on_orbit = tree::ORBIT_NODES[node.orbit.unwrap_or(0)];
+    let orbit_index = node.orbit_index.unwrap_or(0);
+    let two_pi = PI * 2.0;
+
+    let angle = match skills_on_orbit {
+        16 => (tree::ORBIT_ANGLES_16[orbit_index] as f32).to_radians(),
+        40 => (tree::ORBIT_ANGLES_40[orbit_index] as f32).to_radians(),
+        an => two_pi / an as f32 * orbit_index as f32,
+    };
+
+    let x = group.x + radius * angle.sin();
+    let y = group.y - radius * angle.cos();
+
+    [x, y]
+}
+
+fn sprite_uv(sheet: &Sprite, coord: &SpriteCoords) -> Rect {
+    Rect::from_min_max(
+        pos2((coord.x / sheet.w) as f32, (coord.y / sheet.h) as f32),
+        pos2(
+            (coord.x + coord.w) as f32 / sheet.w as f32,
+            (coord.y + coord.h) as f32 / sheet.h as f32,
+        ),
+    )
 }
 
 impl eframe::App for TemplateApp {
@@ -129,10 +151,10 @@ impl eframe::App for TemplateApp {
             .exact_width(250.0)
             .show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
-                    ui.button("Tree");
-                    ui.button("Skills");
-                    ui.button("Calcs");
-                    ui.button("Party");
+                    if ui.button("Tree").clicked() {};
+                    if ui.button("Skills").clicked() {};
+                    if ui.button("Calcs").clicked() {};
+                    if ui.button("Party").clicked() {};
                 });
                 ui.label("Main Skill:");
                 let mut selected = "";
@@ -193,24 +215,25 @@ impl eframe::App for TemplateApp {
                 Color32::from_rgb(255, 255, 255),
             );
 
-            for group in self.tree.groups.values().into_iter() {
+            for group in self.tree.groups.values() {
                 if let Some(bg) = &group.background {
-                    let half_image = bg.is_half_image.or(Some(false)).unwrap();
-                    let spritesheet = self
-                        .tree
-                        .sprites
-                        .get("groupBackground")
-                        .unwrap()
-                        .get("0.3835")
-                        .unwrap();
+                    let half_image = bg.is_half_image.unwrap_or(false);
+                    let spritesheet = &self.tree.sprites.group_background.sprites;
                     if let Some(sprite) = spritesheet.coords.get(&bg.image) {
+                        let offset = match half_image {
+                            true => ((sprite.w / 2) as f32 * -1.0, sprite.h as f32 * -1.0),
+                            false => ((sprite.w / 2) as f32 * -1.0, (sprite.h / 2) as f32 * -1.0),
+                        };
                         painter.image(
                             self.group_bg_tex,
                             Rect::from_min_max(
-                                to_screen.transform_pos(Pos2::new(group.x, group.y)),
                                 to_screen.transform_pos(Pos2::new(
-                                    group.x + sprite.w as f32,
-                                    group.y + sprite.h as f32,
+                                    group.x + offset.0,
+                                    group.y + offset.1,
+                                )),
+                                to_screen.transform_pos(Pos2::new(
+                                    group.x + sprite.w as f32 + offset.0,
+                                    group.y + sprite.h as f32 + offset.1,
                                 )),
                             ),
                             Rect::from_min_max(
@@ -230,12 +253,12 @@ impl eframe::App for TemplateApp {
                                 self.group_bg_tex,
                                 Rect::from_min_max(
                                     to_screen.transform_pos(Pos2::new(
-                                        group.x,
-                                        group.y + sprite.h as f32,
+                                        group.x + offset.0,
+                                        group.y + sprite.h as f32 + offset.1,
                                     )),
                                     to_screen.transform_pos(Pos2::new(
-                                        group.x + sprite.w as f32,
-                                        group.y + sprite.h as f32 + sprite.h as f32,
+                                        group.x + sprite.w as f32 + offset.0,
+                                        group.y + sprite.h as f32 + sprite.h as f32 + offset.1,
                                     )),
                                 ),
                                 Rect::from_min_max(
@@ -255,39 +278,76 @@ impl eframe::App for TemplateApp {
                 }
             }
 
-            for node in self.tree.nodes.values().into_iter() {
-                if let Some(_) = &node.icon {
-                    if let Some(orbit) = node.orbit {
-                        let group_num = node.group.unwrap();
-                        let group_str = format!("{group_num}");
-                        let group = self.tree.groups.get(&group_str).unwrap();
-                        let spritesheet = self
-                            .tree
-                            .sprites
-                            .get("groupBackground")
-                            .unwrap()
-                            .get("0.3835")
-                            .unwrap();
-                        if let Some(bg) = &group.background {
-                            if let Some(sprite) = spritesheet.coords.get(&bg.image) {
-                                let is_half_image = bg.is_half_image.or(Some(false)).unwrap();
-                                let opos = orbit_position(
-                                    group.x + (sprite.w as f32 / 2.0),
-                                    group.y
-                                        + (sprite.h as f32 / 2.0)
-                                        + if is_half_image {
-                                            sprite.h as f32 / 2.0
-                                        } else {
-                                            0.0
-                                        },
-                                    self.tree.constants.orbit_radii[orbit] as f32,
-                                    node.orbit_index.unwrap_or(0),
-                                    orbit,
-                                );
-                                painter.circle_filled(
-                                    to_screen.transform_pos(Pos2::new(opos[0], opos[1])),
-                                    25.0 * (1.0 / self.zoom),
-                                    Color32::from_rgb(0, 255, 0),
+            let normal_active = &self.tree.sprites.normal_active.sprites;
+
+            for node in self.tree.nodes.values() {
+                if node.is_proxy.unwrap_or(false) {
+                    continue;
+                }
+                if let Some(icon) = &node.icon {
+                    if let Some(sprite_info) = normal_active.coords.get(icon) {
+                        if let Some(group_num) = node.group {
+                            let group_str = format!("{group_num}");
+                            let group = self.tree.groups.get(&group_str).unwrap();
+                            let orbitpos = orbit_position(node, group);
+                            let opos = [
+                                orbitpos[0] - sprite_info.w as f32 / 2.0,
+                                orbitpos[1] - sprite_info.h as f32 / 2.0,
+                            ];
+                            let scalar = match node.is_notable.unwrap_or(false) {
+                                true => 2.0,
+                                false => 1.0,
+                            };
+                            painter.image(
+                                self.skills_tex,
+                                Rect::from_min_max(
+                                    to_screen.transform_pos(pos2(opos[0], opos[1])),
+                                    to_screen.transform_pos(pos2(
+                                        opos[0] + (sprite_info.w as f32 * scalar),
+                                        opos[1] + (sprite_info.h as f32 * scalar),
+                                    )),
+                                ),
+                                Rect::from_min_max(
+                                    pos2(
+                                        sprite_info.x as f32 / normal_active.w as f32,
+                                        sprite_info.y as f32 / normal_active.h as f32,
+                                    ),
+                                    pos2(
+                                        (sprite_info.x as f32 + sprite_info.w as f32)
+                                            / normal_active.w as f32,
+                                        (sprite_info.y as f32 + sprite_info.h as f32)
+                                            / normal_active.h as f32,
+                                    ),
+                                ),
+                                Color32::WHITE,
+                            );
+                            if node.is_notable.unwrap_or(false) {
+                                let frames = &self.tree.sprites.frame.sprites.coords;
+                                let notable_frame = frames.get("NotableFrameUnallocated").unwrap();
+                                painter.image(
+                                    self.frame_tex,
+                                    Rect::from_min_max(
+                                        to_screen.transform_pos(pos2(opos[0], opos[1])),
+                                        to_screen.transform_pos(pos2(
+                                            opos[0] + notable_frame.w as f32,
+                                            opos[1] + notable_frame.h as f32,
+                                        )),
+                                    ),
+                                    Rect::from_min_max(
+                                        pos2(
+                                            notable_frame.x as f32
+                                                / self.tree.sprites.frame.sprites.w as f32,
+                                            notable_frame.y as f32
+                                                / self.tree.sprites.frame.sprites.h as f32,
+                                        ),
+                                        pos2(
+                                            (notable_frame.x + notable_frame.w) as f32
+                                                / self.tree.sprites.frame.sprites.w as f32,
+                                            (notable_frame.y + notable_frame.h) as f32
+                                                / self.tree.sprites.frame.sprites.h as f32,
+                                        ),
+                                    ),
+                                    Color32::WHITE,
                                 );
                             }
                         }
@@ -295,16 +355,5 @@ impl eframe::App for TemplateApp {
                 }
             }
         });
-
-        let dbgp = ctx.debug_painter();
-        dbgp.debug_text(
-            pos2(20.0, 20.0),
-            Align2::LEFT_TOP,
-            Color32::from_rgb(255, 255, 255),
-            format!(
-                "FPS: {}",
-                1.0 / self.frame_times.mean_time_interval().unwrap_or_default()
-            ),
-        );
     }
 }

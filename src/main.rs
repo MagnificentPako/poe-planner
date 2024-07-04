@@ -18,7 +18,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "eframe template",
+        "PoE Planner",
         native_options,
         Box::new(|cc| Box::new(poe_planner_egui::TemplateApp::new(cc))),
     )
