@@ -17,10 +17,11 @@ fn main() -> eframe::Result<()> {
             ),
         ..Default::default()
     };
+
     eframe::run_native(
         "PoE Planner",
         native_options,
-        Box::new(|cc| Box::new(poe_planner_egui::TemplateApp::new(cc))),
+        Box::new(|cc| Ok(Box::new(poe_planner_egui::TemplateApp::new(cc)))),
     )
 }
 
