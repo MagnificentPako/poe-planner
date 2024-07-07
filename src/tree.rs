@@ -1,4 +1,4 @@
-use std::{collections::HashMap, f32::consts::PI};
+use std::{collections::HashMap, f32::consts::PI, sync::OnceLock};
 
 use egui::{pos2, Pos2};
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ pub const CLASS_ART: [&str; 8] = [
 #[derive(Serialize, Deserialize, Default)]
 pub struct Class {}
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupBackground {
     pub image: String,
@@ -151,10 +151,43 @@ fn orbit_position(node: &Node, group: &Group) -> (f32, f32) {
     (x, y)
 }
 
+pub fn fix_export(tree: TreeExport) -> TreeExport {
+    let mut fixed_tree = tree;
+
+    let start_nodes = fixed_tree
+        .nodes
+        .values()
+        .filter(|x| x.is_ascendancy_start)
+        .collect::<Vec<&Node>>();
+
+    for node in start_nodes {
+        let (group_id, group) = fixed_tree
+            .groups
+            .iter()
+            .find(|(id, _)| id.parse::<usize>().unwrap() == node.group.unwrap())
+            .unwrap();
+        let ascendancy_name = node.ascendancy_name.as_ref().unwrap();
+        let new_position = ascendancy_starts().get(ascendancy_name as &str).unwrap();
+        let new_group = Group {
+            background: group.background.clone(),
+            nodes: group.nodes.clone(),
+            orbits: group.orbits.clone(),
+            x: new_position.x as f32,
+            y: new_position.y as f32,
+        };
+        fixed_tree.groups.insert(group_id.to_string(), new_group);
+    }
+
+    fixed_tree
+}
+
 impl TreeExport {
     pub fn new() -> Option<TreeExport> {
         match serde_json::from_str(&String::from_utf8_lossy(TREE_DATA)) {
-            Ok(te) => Some(te),
+            Ok(te) => {
+                let fixed = fix_export(te);
+                Some(fixed)
+            }
             Err(e) => panic!("{}", e),
         }
     }
@@ -204,11 +237,8 @@ impl TreeExport {
         start_nodes
             .into_iter()
             .map(|node| {
-                let (_, group) = self
-                    .groups
-                    .iter()
-                    .find(|group| group.0.parse::<usize>().unwrap() == node.group.unwrap())
-                    .unwrap();
+                let ascendancy_name = node.ascendancy_name.as_ref().unwrap();
+                let group = ascendancy_starts().get(ascendancy_name as &str).unwrap();
                 (
                     pos2(group.x, group.y),
                     format!("Classes{}", &node.ascendancy_name.as_ref().unwrap()),
@@ -234,4 +264,46 @@ impl Node {
 
         FrameType::None
     }
+}
+
+// This acts like the `lazy_static` crate and allows for e.g. static HashMaps; It only gets computed once when first called.
+pub fn ascendancy_starts() -> &'static HashMap<&'static str, Pos2> {
+    static HASHMAP: OnceLock<HashMap<&str, Pos2>> = OnceLock::new();
+    HASHMAP.get_or_init(|| {
+        let mut m = HashMap::new();
+        //Marauder
+        m.insert("Juggernaut", pos2(-10400.0, 5200.0));
+        m.insert("Berserker", pos2(-10400.0, 3700.0));
+        m.insert("Chieftain", pos2(-10400.0, 2200.0));
+
+        //Ranger
+        m.insert("Raider", pos2(10200.0, 5200.0));
+        m.insert("Deadeye", pos2(10200.0, 2200.0));
+        m.insert("Pathfinder", pos2(10200.0, 3700.0));
+
+        //Witch
+        m.insert("Occultist", pos2(-1500.0, -9850.0));
+        m.insert("Elementalist", pos2(0.0, -9850.0));
+        m.insert("Necromancer", pos2(1500.0, -9850.0));
+
+        //Duelist
+        m.insert("Slayer", pos2(-1500.0, 9850.0));
+        m.insert("Gladiator", pos2(0.0, 9850.0));
+        m.insert("Champion", pos2(1500.0, 9850.0));
+
+        //Templar
+        m.insert("Inquisitor", pos2(-10400.0, -2200.0));
+        m.insert("Hierophant", pos2(-10400.0, -3700.0));
+        m.insert("Guardian", pos2(-10400.0, -5200.0));
+
+        //Shadow
+        m.insert("Assassin", pos2(10200.0, -5200.0));
+        m.insert("Trickster", pos2(10200.0, -3700.0));
+        m.insert("Saboteur", pos2(10200.0, -2200.0));
+
+        //Ascendant
+        m.insert("Ascendant", pos2(-7800.0, 7200.0));
+
+        m
+    })
 }
